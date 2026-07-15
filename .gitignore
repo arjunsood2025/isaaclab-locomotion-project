@@ -1,0 +1,26 @@
+# experiment artifacts
+logs/
+videos/
+exported/
+outputs/
+wandb/
+reports/eval_*.json
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# C++ build
+source/deployment/cpp_inference_loop/build/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Prep
+CLAUDE.md
+GUIDE.md

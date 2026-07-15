@@ -1,0 +1,7 @@
+# Env overrides for flat-ground training (task Go2-Flat-v0).
+# Flat YAML of dotted-path: value pairs applied onto the env config by train.py.
+# Anything in the config tree is overridable, e.g. reward weights for ablations:
+#   rewards.energy.weight: 0.0
+
+scene.num_envs: 4096
+episode_length_s: 20.0

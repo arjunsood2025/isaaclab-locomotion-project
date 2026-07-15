@@ -1,0 +1,46 @@
+# PPO config for depth-vision locomotion (task Go2-Vision-v0).
+# Selects the custom ActorCriticVision policy; the "policy" section (minus class_name)
+# is forwarded to its constructor, so prop_dim / image_shape MUST match the observation
+# layout of VisionObservationsCfg (48 proprio dims + 1x64x64 depth).
+
+seed: 42
+device: "cuda:0"
+max_iterations: 5000          # pixels are slower to learn from than height scans
+
+# fewer envs (1024, set by the env cfg) but longer rollouts keep the batch size healthy:
+# 48 steps x 1024 envs = 49152 transitions per update
+num_steps_per_env: 48
+save_interval: 100
+experiment_name: go2_vision
+run_name: ""
+logger: tensorboard
+wandb_project: isaaclab-locomotion
+# MUST stay false: running mean/var over 4096 pixel channels is wasteful and unstable;
+# the depth image is already normalized to [0,1] and the encoder ends in LayerNorm
+empirical_normalization: false
+
+policy:
+  class_name: ActorCriticVision
+  init_noise_std: 1.0
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]   # critic sees privileged obs (height scan), no CNN
+  activation: elu
+  prop_dim: 48                # base(9) + cmd(3) + q(12) + qd(12) + last_action(12)
+  image_shape: [1, 64, 64]
+  embed_dim: 128
+  encoder_channels: [16, 32, 64, 64]
+
+algorithm:
+  class_name: PPO
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.005
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 5.0e-4       # halved: CNN gradients are noisier than MLP-only
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0

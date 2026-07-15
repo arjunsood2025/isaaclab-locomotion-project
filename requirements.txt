@@ -1,0 +1,23 @@
+# Prerequisites installed SEPARATELY (not pip-installable from PyPI alone):
+#   1. Isaac Sim 4.5+  https://docs.isaacsim.omniverse.nvidia.com/
+#   2. Isaac Lab 2.x   https://isaac-sim.github.io/IsaacLab/  (provides isaaclab,
+#      isaaclab_assets, isaaclab_rl, isaaclab_tasks and a pinned torch build)
+# Run everything inside Isaac Lab's python environment:
+#   Linux:   ./isaaclab.sh -p source/policies/train.py ...
+#   Windows: isaaclab.bat -p source\policies\train.py ...
+
+# RL framework (version this codebase targets)
+rsl-rl-lib==2.2.4
+
+# logging / analysis
+tensorboard
+wandb
+pyyaml
+matplotlib
+
+# export path
+onnx
+
+# deployment node only (needs a ROS2 environment, e.g. Humble; rclpy comes from ROS2,
+# not pip — listed here for documentation)
+# rclpy

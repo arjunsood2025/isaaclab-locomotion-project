@@ -1,0 +1,38 @@
+# PPO config for the domain-randomized run (task Go2-Rough-DR-v0).
+# Identical hyperparameters to the baseline ON PURPOSE: the only experimental variable
+# between go2_rough_baseline and go2_rough_dr is the randomization stack in the env,
+# so any robustness difference is attributable to DR, not tuning.
+
+seed: 42
+device: "cuda:0"
+max_iterations: 2000          # DR widens the state distribution; give it ~30% more steps
+
+num_steps_per_env: 24
+save_interval: 50
+experiment_name: go2_rough_dr
+run_name: ""
+logger: tensorboard
+wandb_project: isaaclab-locomotion
+empirical_normalization: false
+
+policy:
+  class_name: ActorCritic
+  init_noise_std: 1.0
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
+  activation: elu
+
+algorithm:
+  class_name: PPO
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.005
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 1.0e-3
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0

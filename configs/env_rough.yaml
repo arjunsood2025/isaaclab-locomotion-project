@@ -1,0 +1,11 @@
+# Env overrides for rough-terrain training (tasks Go2-Rough-v0 / Go2-Rough-DR-v0).
+# Flat YAML of dotted-path: value pairs applied onto the env config by train.py.
+#
+# Reward-ablation examples (train one run per line, then compare with evaluate.py):
+#   rewards.action_rate.weight: 0.0        # expect: twitchy motion
+#   rewards.energy.weight: 0.0             # expect: high-torque unnatural gait
+#   rewards.feet_slide.weight: 0.0         # expect: skating
+#   rewards.flat_orientation.weight: 0.0   # expect: unstable body posture
+
+scene.num_envs: 4096
+episode_length_s: 20.0

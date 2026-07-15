@@ -1,0 +1,37 @@
+# rsl_rl OnPolicyRunner config -- PPO baseline (blind flat/rough policies).
+# Passed straight through as the runner's train_cfg dict by source/policies/train.py.
+
+seed: 42
+device: "cuda:0"
+max_iterations: 1500          # ~1500 iters x 24 steps x 4096 envs ~ 150M env steps
+
+# rollout: 24 control steps x 4096 envs = 98304 transitions per PPO update
+num_steps_per_env: 24
+save_interval: 50
+experiment_name: go2_rough_baseline
+run_name: ""
+logger: tensorboard           # or: wandb (also set wandb_project)
+wandb_project: isaaclab-locomotion
+empirical_normalization: false
+
+policy:
+  class_name: ActorCritic
+  init_noise_std: 1.0         # generous initial exploration; PPO anneals it
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
+  activation: elu             # smooth activation -> smoother action landscapes than relu
+
+algorithm:
+  class_name: PPO
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  entropy_coef: 0.005
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 1.0e-3
+  schedule: adaptive          # KL-adaptive LR: the workhorse trick for stable locomotion PPO
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0
