@@ -13,7 +13,12 @@ from .locomotion_env import (
     Go2RoughEnvCfg,
     Go2RoughPlayEnvCfg,
 )
-from .vision_env import Go2VisionEnvCfg, Go2VisionPlayEnvCfg
+from .vision_env import (
+    Go2VisionDistillEnvCfg,
+    Go2VisionDistillPlayEnvCfg,
+    Go2VisionEnvCfg,
+    Go2VisionPlayEnvCfg,
+)
 
 # task id -> env cfg class
 TASK_CFGS = {
@@ -24,6 +29,8 @@ TASK_CFGS = {
     "Go2-Rough-DR-v0": Go2RoughDREnvCfg,
     "Go2-Vision-v0": Go2VisionEnvCfg,
     "Go2-Vision-Play-v0": Go2VisionPlayEnvCfg,
+    "Go2-Vision-Distill-v0": Go2VisionDistillEnvCfg,
+    "Go2-Vision-Distill-Play-v0": Go2VisionDistillPlayEnvCfg,
 }
 
 for task_id, cfg_class in TASK_CFGS.items():

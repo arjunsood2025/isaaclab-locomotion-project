@@ -1,0 +1,7 @@
+# Ablation: remove both effort penalties.
+# Hypothesis: a high-torque, energetically wasteful gait. Measured by mean_torque_Nm,
+# energy_per_m and cost_of_transport in evaluate.py.
+scene.num_envs: 4096
+episode_length_s: 20.0
+rewards.energy.weight: 0.0
+rewards.joint_torques.weight: 0.0

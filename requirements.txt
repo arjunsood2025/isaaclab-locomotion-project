@@ -1,13 +1,16 @@
 # Prerequisites installed SEPARATELY (not pip-installable from PyPI alone):
 #   1. Isaac Sim 4.5+  https://docs.isaacsim.omniverse.nvidia.com/
-#   2. Isaac Lab 2.x   https://isaac-sim.github.io/IsaacLab/  (provides isaaclab,
+#   2. Isaac Lab 2.3+  https://isaac-sim.github.io/IsaacLab/  (provides isaaclab,
 #      isaaclab_assets, isaaclab_rl, isaaclab_tasks and a pinned torch build)
 # Run everything inside Isaac Lab's python environment:
 #   Linux:   ./isaaclab.sh -p source/policies/train.py ...
 #   Windows: isaaclab.bat -p source\policies\train.py ...
 
-# RL framework (version this codebase targets)
-rsl-rl-lib==2.2.4
+# RL framework. This codebase targets the rsl-rl >= 5.0 API (separate actor/critic model
+# configs, TensorDict observation groups, built-in CNN encoders). isaaclab_rl pins the
+# matching version, so normally it is already installed with Isaac Lab -- do not
+# downgrade it.
+rsl-rl-lib>=5.0.1
 
 # logging / analysis
 tensorboard

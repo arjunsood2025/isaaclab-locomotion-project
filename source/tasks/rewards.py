@@ -275,6 +275,7 @@ def foot_clearance(
     target_height: float,
     tanh_mult: float,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    sensor_cfg: SceneEntityCfg | None = None,
 ) -> torch.Tensor:
     """Penalize swing-foot height deviation from a target clearance.
 
@@ -283,14 +284,37 @@ def foot_clearance(
     fades out for stance feet. Encourages deliberate foot lifting, which matters on
     rough terrain and stairs where toe-dragging causes trips.
 
-    Note: uses world-frame foot z, which assumes locally flat terrain under the foot.
-    Good enough as a shaping term; the height scanner / camera carries the real
-    terrain information.
+    Clearance is measured against the terrain *under each foot*, not against world z=0.
+    That distinction is not cosmetic: this terrain generator produces pyramid stairs and
+    slopes reaching roughly +/-2.3 m, so an absolute-z version of this term charges a
+    robot standing on top of the stairs (2.3 - 0.08)^2 ~ 4.9 per foot instead of ~0 --
+    i.e. it penalizes the robot for climbing, fighting the very terrain curriculum it is
+    meant to support. (This was a real bug here, found as a -260 spike in the training
+    reward curve and traced through the per-term episodic breakdown.)
+
+    Ground height under a foot is read from the height-scanner ray-cast hits by nearest
+    ray in the xy-plane; at 0.1 m ray spacing that is accurate to well under a foot
+    width. ``sensor_cfg=None`` falls back to world z, which is exact on a flat plane and
+    is what the flat task uses (it has no scanner).
     """
     asset: Articulation = env.scene[asset_cfg.name]
-    foot_z_error = torch.square(
-        asset.data.body_pos_w[:, asset_cfg.body_ids, 2] - target_height
-    )
+    foot_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :]  # (N, F, 3)
+
+    if sensor_cfg is not None:
+        sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
+        hits = sensor.data.ray_hits_w  # (N, R, 3)
+        # nearest scan point to each foot, horizontally
+        nearest = torch.cdist(foot_pos_w[..., :2], hits[..., :2]).argmin(dim=-1)  # (N, F)
+        ground_z = torch.gather(hits[..., 2], 1, nearest)
+        # a ray that hit nothing comes back inf; fall back to the foot's own height so
+        # the term contributes ~0 rather than an enormous spurious penalty
+        ground_z = torch.where(
+            torch.isfinite(ground_z), ground_z, foot_pos_w[..., 2] - target_height
+        )
+    else:
+        ground_z = torch.zeros_like(foot_pos_w[..., 2])
+
+    foot_z_error = torch.square((foot_pos_w[..., 2] - ground_z) - target_height)
     swing_weight = torch.tanh(
         tanh_mult * asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2].norm(dim=-1)
     )

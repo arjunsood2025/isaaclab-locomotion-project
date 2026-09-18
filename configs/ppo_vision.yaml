@@ -1,7 +1,13 @@
 # PPO config for depth-vision locomotion (task Go2-Vision-v0).
-# Selects the custom ActorCriticVision policy; the "policy" section (minus class_name)
-# is forwarded to its constructor, so prop_dim / image_shape MUST match the observation
-# layout of VisionObservationsCfg (48 proprio dims + 1x64x64 depth).
+#
+# The actor is a CNNModel: rsl_rl routes each observation group by rank -- 1D groups are
+# concatenated straight into the MLP, 2D/image groups (B, C, H, W) each get their own CNN
+# encoder whose flattened output is concatenated alongside. So the "depth" group declared
+# in VisionObservationsCfg is encoded, "policy" (proprioception) is not, and the MLP sees
+# [proprio | depth_latent]. The critic stays a plain MLPModel on the privileged "critic"
+# group -- asymmetric actor-critic, no pixels in the value function.
+#
+# Schema: rsl-rl >= 5.0 (see configs/ppo_baseline.yaml for the layout notes).
 
 seed: 42
 device: "cuda:0"
@@ -15,20 +21,43 @@ experiment_name: go2_vision
 run_name: ""
 logger: tensorboard
 wandb_project: isaaclab-locomotion
-# MUST stay false: running mean/var over 4096 pixel channels is wasteful and unstable;
-# the depth image is already normalized to [0,1] and the encoder ends in LayerNorm
-empirical_normalization: false
+clip_actions: null
+check_for_nan: true
 
-policy:
-  class_name: ActorCriticVision
-  init_noise_std: 1.0
-  actor_hidden_dims: [512, 256, 128]
-  critic_hidden_dims: [512, 256, 128]   # critic sees privileged obs (height scan), no CNN
+obs_groups:
+  actor: ["policy", "depth"]  # proprioception + egocentric depth image
+  critic: ["critic"]          # privileged: clean state + foot contacts + true height scan
+
+actor:
+  class_name: CNNModel
+  hidden_dims: [512, 256, 128]
   activation: elu
-  prop_dim: 48                # base(9) + cmd(3) + q(12) + qd(12) + last_action(12)
-  image_shape: [1, 64, 64]
-  embed_dim: 128
-  encoder_channels: [16, 32, 64, 64]
+  # normalizes the 1D groups only; the depth image is already mapped to [0, 1] by
+  # source/tasks/observations.py:depth_image, and running stats over 4096 pixel
+  # channels would be both wasteful and unstable
+  obs_normalization: false
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+  # 5 stride-2 convs take 64x64 -> 2x2; 64 channels x 2 x 2 = 256-dim visual latent.
+  # Chosen so the visual latent stays the same order of magnitude as the 48 proprio
+  # dims -- a flattened 4x4x64 = 1024 latent would swamp proprioception at the MLP
+  # input. Kernel 3 / "zeros" padding = same-size convolutions before striding.
+  cnn_cfg:
+    output_channels: [16, 32, 64, 64, 64]
+    kernel_size: 3
+    stride: 2
+    padding: zeros
+    norm: none
+    activation: elu
+    flatten: true
+
+critic:
+  class_name: MLPModel
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  obs_normalization: false
 
 algorithm:
   class_name: PPO
@@ -44,3 +73,6 @@ algorithm:
   lam: 0.95
   desired_kl: 0.01
   max_grad_norm: 1.0
+  normalize_advantage_per_mini_batch: false
+  rnd_cfg: null
+  symmetry_cfg: null

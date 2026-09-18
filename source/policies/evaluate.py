@@ -42,6 +42,9 @@ parser.add_argument("--agent_cfg", type=str, default="configs/ppo_baseline.yaml"
 parser.add_argument("--load_run", type=str, default=None,
                     help="Run directory to evaluate (default: latest).")
 parser.add_argument("--checkpoint", type=str, default=None, help="Explicit checkpoint path.")
+parser.add_argument("--experiment_name", type=str, default=None,
+                    help="Override the log folder name to load from "
+                         "(must match what training used).")
 parser.add_argument("--num_episodes", type=int, default=100,
                     help="Completed episodes to collect before reporting.")
 parser.add_argument("--suite", type=str, default="nominal", choices=["nominal", "push"],
@@ -53,6 +56,11 @@ parser.add_argument("--push_time", type=float, default=5.0,
 parser.add_argument("--recovery_window", type=float, default=3.0,
                     help="Seconds after the push within which a fall counts as failed recovery.")
 parser.add_argument("--num_envs", type=int, default=None, help="Override number of envs.")
+parser.add_argument("--seed", type=int, default=42,
+                    help="Environment seed. Fixing it makes evaluation reproducible and, "
+                         "more importantly, puts every policy through the identical "
+                         "sequence of spawn poses, commands and physics-material draws -- "
+                         "so a difference between two policies is the policy, not the dice.")
 parser.add_argument("--output_dir", type=str, default="reports",
                     help="Directory for the JSON results file.")
 AppLauncher.add_app_launcher_args(parser)
@@ -69,7 +77,7 @@ from datetime import datetime  # noqa: E402
 
 import gymnasium as gym  # noqa: E402
 import torch  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner  # noqa: E402
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
@@ -78,7 +86,6 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 import source.tasks as tasks  # noqa: E402
-from source.policies.models import register_custom_modules  # noqa: E402
 from source.policies.utils import load_agent_cfg, resolve_checkpoint  # noqa: E402
 
 GRAVITY = 9.81
@@ -99,7 +106,17 @@ class EpisodeRecorder:
         self.distance = zeros()
         self.pushed = torch.zeros(num_envs, dtype=torch.bool, device=device)
         self.push_step = zeros()
+        # One episode per environment: see the note in finalize().
+        self.counted = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        # gait-quality diagnostics: these exist so reward ablations are measurable.
+        # Zeroing a reward weight makes that term log as 0.0 during training, so the
+        # reward telemetry cannot show whether the behaviour it suppressed came back --
+        # it has to be measured independently at evaluation time.
+        self.foot_slip_sum = zeros()   # tangential foot speed while in contact -> skating
+        self.action_rate_sum = zeros() # ||a_t - a_{t-1}||               -> twitchiness
+        self.torque_sum = zeros()      # mean |tau| per joint            -> effort
         self.episodes: list[dict] = []
+        self._foot_ids: torch.Tensor | None = None
 
     def step(self, base_env, prev_pos_xy: torch.Tensor):
         robot = base_env.scene["robot"]
@@ -118,9 +135,43 @@ class EpisodeRecorder:
         # handled by finalize before the next step call)
         self.distance += torch.norm(robot.data.root_pos_w[:, :2] - prev_pos_xy, dim=1)
 
+        # -- gait diagnostics
+        if self._foot_ids is None:
+            self._foot_ids = torch.tensor(
+                robot.find_bodies(".*_foot")[0], device=self.device, dtype=torch.long
+            )
+        feet = self._foot_ids
+        # foot slip: planar speed of feet that are loaded. A foot bearing load should be
+        # planted; any tangential velocity while in contact is skating.
+        contacts = base_env.scene["contact_forces"]
+        forces = (
+            contacts.data.net_forces_w_history[:, :, feet, :].norm(dim=-1).max(dim=1)[0]
+        )
+        in_contact = (forces > 1.0).float()
+        foot_speed = robot.data.body_lin_vel_w[:, feet, :2].norm(dim=-1)
+        self.foot_slip_sum += (foot_speed * in_contact).sum(dim=1) / in_contact.sum(
+            dim=1
+        ).clamp(min=1.0)
+        self.action_rate_sum += torch.norm(
+            base_env.action_manager.action - base_env.action_manager.prev_action, dim=1
+        )
+        self.torque_sum += robot.data.applied_torque.abs().mean(dim=1)
+
     def finalize(self, done_ids: torch.Tensor, fell: torch.Tensor, recovery_failed: torch.Tensor):
-        """Convert finished env rollouts into episode records and reset accumulators."""
+        """Record each environment's FIRST completed episode, then reset accumulators.
+
+        Sampling one episode per env is a correctness requirement, not a convenience.
+        Collecting "the first N episodes to finish" across parallel envs biases the
+        sample toward failures: a robot that falls at t=200 finishes -- and can restart
+        and finish *again* -- before a robot that survives to the t=1000 timeout has
+        finished once. That inflates the fall rate and deflates mean episode distance.
+        Envs are i.i.d. over terrain patch, spawn pose and command, so one episode from
+        each is an unbiased sample.
+        """
         for i, env_id in enumerate(done_ids.tolist()):
+            if bool(self.counted[env_id]):
+                continue  # this env already contributed its episode
+            self.counted[env_id] = True
             steps = max(int(self.steps[env_id].item()), 1)
             dist = self.distance[env_id].item()
             energy = self.energy[env_id].item()
@@ -137,13 +188,17 @@ class EpisodeRecorder:
                     if dist > 0.05
                     else float("nan")
                 ),
+                "foot_slip_mps": self.foot_slip_sum[env_id].item() / steps,
+                "action_rate": self.action_rate_sum[env_id].item() / steps,
+                "mean_torque_Nm": self.torque_sum[env_id].item() / steps,
                 "was_pushed": bool(self.pushed[env_id].item()),
                 "recovery_failed": bool(recovery_failed[i].item()),
             }
             self.episodes.append(record)
         # reset accumulators for the envs that just restarted
         for buf in (self.steps, self.lin_vel_err_sum, self.ang_vel_err_sum,
-                    self.energy, self.distance, self.push_step):
+                    self.energy, self.distance, self.push_step,
+                    self.foot_slip_sum, self.action_rate_sum, self.torque_sum):
             buf[done_ids] = 0.0
         self.pushed[done_ids] = False
 
@@ -163,7 +218,8 @@ def aggregate(episodes: list[dict]) -> dict:
     """Mean of each numeric field over episodes (nan-safe)."""
     result = {"num_episodes": len(episodes)}
     keys = ["success", "fall", "distance_m", "lin_vel_err_mps", "ang_vel_err_rps",
-            "energy_J", "energy_per_m", "cost_of_transport"]
+            "energy_J", "energy_per_m", "cost_of_transport",
+            "foot_slip_mps", "action_rate", "mean_torque_Nm"]
     for key in keys:
         values = [e[key] for e in episodes if not math.isnan(float(e[key]))]
         result[key] = sum(float(v) for v in values) / max(len(values), 1)
@@ -178,20 +234,32 @@ def aggregate(episodes: list[dict]) -> dict:
 def main():
     agent_cfg = load_agent_cfg(args_cli.agent_cfg)
     env_cfg = tasks.get_env_cfg(args_cli.task)
-    if args_cli.num_envs is not None:
-        env_cfg.scene.num_envs = args_cli.num_envs
+    # one episode per env, so we need at least as many envs as requested episodes
+    env_cfg.seed = args_cli.seed
+    env_cfg.scene.num_envs = args_cli.num_envs or args_cli.num_episodes
+    if env_cfg.scene.num_envs < args_cli.num_episodes:
+        raise ValueError(
+            f"--num_envs ({env_cfg.scene.num_envs}) must be >= --num_episodes "
+            f"({args_cli.num_episodes}): evaluation samples one episode per environment."
+        )
 
     env = gym.make(args_cli.task, cfg=env_cfg)
-    env = RslRlVecEnvWrapper(env)
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.get("clip_actions"))
     base_env = env.unwrapped
     device = base_env.device
 
     # load policy
-    register_custom_modules()
-    log_root = os.path.join(REPO_ROOT, "logs", "rsl_rl", agent_cfg["experiment_name"])
+    experiment = args_cli.experiment_name or agent_cfg["experiment_name"]
+    log_root = os.path.join(REPO_ROOT, "logs", "rsl_rl", experiment)
     ckpt_path = resolve_checkpoint(log_root, args_cli.load_run, args_cli.checkpoint)
     print(f"[INFO] Evaluating checkpoint: {ckpt_path}")
-    runner = OnPolicyRunner(env, agent_cfg, log_dir=None, device=device)
+    # the agent cfg names its runner; distillation checkpoints hold student+teacher
+    runner_cls = (
+        DistillationRunner
+        if agent_cfg.get("class_name") == "DistillationRunner"
+        else OnPolicyRunner
+    )
+    runner = runner_cls(env, agent_cfg, log_dir=None, device=device)
     runner.load(ckpt_path)
     policy = runner.get_inference_policy(device=device)
 
@@ -203,11 +271,11 @@ def main():
     recovery_steps = int(args_cli.recovery_window / base_env.step_dt)
     push_deadline = torch.zeros(base_env.num_envs, device=device)  # step index limit
 
-    obs, _ = env.get_observations()
+    obs = env.get_observations()
     prev_pos_xy = robot.data.root_pos_w[:, :2].clone()
 
     with torch.inference_mode():
-        while len(recorder.episodes) < args_cli.num_episodes:
+        while int(recorder.counted.sum()) < args_cli.num_episodes:
             actions = policy(obs)
             obs, _, dones, _ = env.step(actions)
 

@@ -1,10 +1,13 @@
 # experiment artifacts
 logs/
 videos/
-exported/
+exported*/
 outputs/
 wandb/
 reports/eval_*.json
+reports/**/eval_*.json
+# superseded by the seeded evaluation protocol; kept locally, not published
+reports/unseeded_archive/
 
 # python
 __pycache__/
@@ -24,3 +27,4 @@ Thumbs.db
 # Prep
 CLAUDE.md
 GUIDE.md
+project_plan.md

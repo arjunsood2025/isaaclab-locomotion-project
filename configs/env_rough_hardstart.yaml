@@ -1,0 +1,8 @@
+# Diagnostic override: spawn robots on the hardest terrain rows immediately.
+# Used to exercise reward terms that only misbehave at high elevation (see the
+# foot_clearance note in source/tasks/rewards.py) without training for 1000+
+# iterations to let the curriculum get there.
+
+scene.num_envs: 256
+scene.terrain.max_init_terrain_level: 9
+curriculum.terrain_levels: null

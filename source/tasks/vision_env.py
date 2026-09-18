@@ -21,6 +21,7 @@ Requires running with ``--enable_cameras``.
 from __future__ import annotations
 
 import isaaclab.sim as sim_utils
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import TiledCameraCfg
@@ -34,8 +35,8 @@ from .locomotion_env import (
     ObservationsCfg,
 )
 
-# image geometry shared with the policy config (configs/ppo_vision.yaml) and the
-# vision actor-critic; change in one place only
+# image geometry shared with the CNN encoder config in configs/ppo_vision.yaml;
+# change in one place only
 DEPTH_IMAGE_SHAPE = (1, 64, 64)
 DEPTH_MAX_RANGE_M = 5.0
 
@@ -70,15 +71,25 @@ class VisionSceneCfg(LocomotionSceneCfg):
 
 @configclass
 class VisionObservationsCfg(ObservationsCfg):
-    """Actor: proprioception (48) + flattened depth (4096). Critic: unchanged
-    (privileged height scan + contacts)."""
+    """Actor: "policy" (48 proprio dims) + "depth" (1x64x64 image). Critic: unchanged
+    (privileged clean state + foot contacts + true height scan).
+
+    The image is a *separate group*, not extra columns on the policy vector. rsl_rl
+    dispatches observation groups by tensor rank, so the rank-4 "depth" group is routed
+    through a CNN encoder while "policy" goes straight to the MLP; the two latents are
+    concatenated inside the model. configs/ppo_vision.yaml wires this up with
+    ``obs_groups: {actor: [policy, depth], critic: [critic]}``.
+    """
 
     @configclass
     class VisionPolicyCfg(ObservationsCfg.PolicyCfg):
-        # remove the privileged height scan from the actor...
+        # the actor loses the privileged height scan -- it must infer terrain from pixels
         height_scan = None
-        # ...and append the depth image (declared last => concatenated last, so the
-        # network can split proprio/image by index)
+
+    @configclass
+    class DepthCfg(ObsGroup):
+        """Single-term image group: (N, 1, 64, 64) normalized inverse depth."""
+
         depth_image = ObsTerm(
             func=local_obs.depth_image,
             params={
@@ -88,7 +99,25 @@ class VisionObservationsCfg(ObservationsCfg):
             noise=Gnoise(mean=0.0, std=0.02),  # depth sensor speckle
         )
 
+        def __post_init__(self):
+            self.enable_corruption = True
+            # single term: concatenation is a no-op, but it must not flatten the image
+            self.concatenate_terms = True
+
+    @configclass
+    class TeacherCfg(ObservationsCfg.PolicyCfg):
+        """Privileged input for the distillation teacher.
+
+        Inherits the base policy group *including* height_scan, so its layout is
+        byte-identical to what the blind DR policy was trained on
+        (48 proprio + 187 height scan = 235). That identity is not optional: the
+        teacher checkpoint's first Linear layer is 235-wide, and rsl_rl loads it with
+        ``strict=True``.
+        """
+
     policy: VisionPolicyCfg = VisionPolicyCfg()
+    depth: DepthCfg = DepthCfg()
+    teacher: TeacherCfg = TeacherCfg()
 
 
 @configclass
@@ -118,4 +147,67 @@ class Go2VisionPlayEnvCfg(Go2VisionEnvCfg):
         self.curriculum.terrain_levels = None
         self.curriculum.command_vel = None
         self.observations.policy.enable_corruption = False
+        self.observations.depth.enable_corruption = False  # no sensor speckle at eval
+        self.events.push_robot = None
+
+
+@configclass
+class Go2VisionDistillEnvCfg(Go2VisionEnvCfg):
+    """Depth-vision locomotion trained by distillation from the blind DR policy.
+
+    Kept separate from ``Go2VisionEnvCfg`` on purpose: the end-to-end RL task remains
+    reproducible, because "we tried end-to-end and it collapsed into a stand-and-turn
+    local optimum" is a result worth being able to re-run, not something to overwrite.
+
+    Why distillation at all: learning to walk *and* to read terrain from pixels at the
+    same time, under full domain randomization, is a hard exploration problem -- the
+    end-to-end run maximized the survival bonus by standing still and never travelled
+    far enough for the terrain curriculum to promote it, so the camera only ever saw
+    flat ground and the encoder collapsed. Distillation removes the exploration problem
+    entirely: the teacher supplies the correct action at every state, and the student
+    only has to learn the perception mapping. This is the approach used by the
+    egocentric-vision locomotion literature (Lee et al. 2020, Agarwal et al. 2022).
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        # The teacher must see exactly what it was trained on, including the same
+        # sensor-latency treatment. Go2RoughDREnvCfg applied delayed-observation
+        # wrappers to the policy group; mirror them onto the teacher group. Each term
+        # gets its own DelayedObservation instance (and so its own per-env delays),
+        # which keeps the teacher inside its training distribution.
+        import copy as _copy
+
+        for term_name in ("joint_pos", "joint_vel", "base_ang_vel"):
+            setattr(
+                self.observations.teacher,
+                term_name,
+                _copy.deepcopy(getattr(self.observations.policy, term_name)),
+            )
+        # the teacher reads the privileged terrain map, so it needs the scan back
+        self.observations.teacher.height_scan = _copy.deepcopy(
+            ObservationsCfg.PolicyCfg().height_scan
+        )
+
+
+@configclass
+class Go2VisionDistillPlayEnvCfg(Go2VisionDistillEnvCfg):
+    """Evaluation variant of the distillation task.
+
+    The teacher observation group is retained even though only the student is being
+    scored: the distillation checkpoint stores both models, and rsl_rl rebuilds both
+    when loading it, so the group has to exist for the load to succeed.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 32
+        self.scene.terrain.terrain_generator = (
+            self.scene.terrain.terrain_generator.replace(num_rows=5, num_cols=8)
+        )
+        self.scene.terrain.max_init_terrain_level = None
+        self.curriculum.terrain_levels = None
+        self.curriculum.command_vel = None
+        self.observations.policy.enable_corruption = False
+        self.observations.depth.enable_corruption = False
         self.events.push_robot = None

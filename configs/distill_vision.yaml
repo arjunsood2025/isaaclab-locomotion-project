@@ -1,0 +1,82 @@
+# Teacher-student distillation: blind DR policy (privileged height scan) -> depth-vision
+# student. Task: Go2-Vision-Distill-v0.
+#
+# Why this exists: end-to-end PPO from pixels (configs/ppo_vision.yaml) collapsed into a
+# stand-and-turn local optimum -- it maximized the survival bonus without translating, so
+# the terrain curriculum never promoted it and the camera never saw anything but flat
+# ground. Distillation removes the exploration problem: the teacher supplies the correct
+# action at every visited state and the student only has to learn perception.
+#
+# Run with:
+#   train.py --task Go2-Vision-Distill-v0 --agent_cfg configs/distill_vision.yaml \
+#       --teacher_checkpoint logs/rsl_rl/go2_rough_dr/<run>/model_1999.pt \
+#       --headless --enable_cameras
+
+class_name: DistillationRunner
+
+seed: 42
+device: "cuda:0"
+max_iterations: 1500
+
+# Distillation is supervised, so it converges far faster per sample than PPO. Longer
+# rollouts also matter more here than batch width: the student must track the teacher
+# through sustained motion, not just at isolated states.
+num_steps_per_env: 48
+save_interval: 100
+experiment_name: go2_vision_distill
+run_name: ""
+logger: tensorboard
+wandb_project: isaaclab-locomotion
+clip_actions: null
+check_for_nan: true
+
+obs_groups:
+  student: ["policy", "depth"]   # deployable: proprioception + 64x64 depth image
+  teacher: ["teacher"]           # privileged: proprioception + 187-ray height scan
+
+# The student is the same architecture the end-to-end run used, so any difference in
+# outcome is attributable to the training signal rather than to the network.
+student:
+  class_name: CNNModel
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  obs_normalization: false
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+  cnn_cfg:
+    output_channels: [16, 32, 64, 64, 64]
+    kernel_size: 3
+    stride: 2
+    padding: zeros
+    norm: none
+    activation: elu
+    flatten: true
+
+# MUST match the blind DR actor exactly -- rsl_rl loads the checkpoint with strict=True,
+# so hidden_dims, activation and the distribution all have to agree with
+# configs/ppo_domain_randomized.yaml. Its observation group is 235-wide, same as that
+# policy's actor input.
+teacher:
+  class_name: MLPModel
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  obs_normalization: false
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+
+algorithm:
+  class_name: Distillation
+  num_learning_epochs: 1        # data is cheap and on-policy; one pass avoids overfitting
+                                # the student to a stale rollout
+  learning_rate: 1.0e-3
+  gradient_length: 15           # BPTT-style window; harmless for a feed-forward student
+                                # and the value rsl_rl's own examples use
+  max_grad_norm: 1.0
+  loss_type: mse                # regress the teacher's mean action directly
+  optimizer: adam
+  rnd_cfg: null                 # required key: the rsl_rl Logger indexes it directly
+  symmetry_cfg: null

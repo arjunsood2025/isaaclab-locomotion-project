@@ -1,0 +1,7 @@
+# Ablation: remove both action-smoothness penalties.
+# Hypothesis: high-frequency joint jitter -- the policy exploits the underlying PD
+# controller with near-bang-bang position targets. Measured by action_rate in evaluate.py.
+scene.num_envs: 4096
+episode_length_s: 20.0
+rewards.action_rate.weight: 0.0
+rewards.action_smoothness.weight: 0.0

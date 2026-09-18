@@ -1,0 +1,6 @@
+# Ablation: remove the foot-slip penalty.
+# Hypothesis: feet skate during stance -- the policy translates the body by dragging
+# loaded feet instead of by swinging them. Measured by foot_slip_mps in evaluate.py.
+scene.num_envs: 4096
+episode_length_s: 20.0
+rewards.feet_slide.weight: 0.0

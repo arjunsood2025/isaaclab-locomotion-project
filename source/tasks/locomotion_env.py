@@ -79,13 +79,13 @@ class LocomotionSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     # 1.6m x 1.0m grid of downward rays around the base, 0.1m resolution -> 187 values.
-    # Rays originate 20m above the base and only follow base yaw (attach_yaw_only), so
-    # the scan stays gravity-aligned when the body rolls/pitches -- matching how an
+    # Rays originate 20m above the base and follow base yaw only (ray_alignment="yaw"),
+    # so the scan stays gravity-aligned when the body rolls/pitches -- matching how an
     # elevation map built from real sensors behaves.
     height_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        attach_yaw_only=True,
+        ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
@@ -405,6 +405,8 @@ class RewardsCfg:
             "target_height": 0.08,
             "tanh_mult": 2.0,
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+            # clearance is measured above the terrain under each foot, not above z=0
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
         },
     )
     undesired_contacts = RewTerm(
@@ -532,6 +534,8 @@ class Go2FlatEnvCfg(Go2RoughEnvCfg):
         self.scene.height_scanner = None
         self.observations.policy.height_scan = None
         self.observations.critic.height_scan = None
+        # ...so foot clearance falls back to world z, which is exact on a flat plane
+        self.rewards.foot_clearance.params["sensor_cfg"] = None
         # no terrain rows to climb
         self.curriculum.terrain_levels = None
         # flat ground: keep the body at nominal height

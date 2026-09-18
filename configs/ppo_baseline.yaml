@@ -1,5 +1,10 @@
 # rsl_rl OnPolicyRunner config -- PPO baseline (blind flat/rough policies).
 # Passed straight through as the runner's train_cfg dict by source/policies/train.py.
+#
+# Schema note: this is the rsl-rl >= 5.0 layout. The old single "policy" section was
+# split into independent "actor" / "critic" model configs, and the mapping from the
+# environment's observation groups to the algorithm's observation sets is now declared
+# explicitly under "obs_groups" instead of being implied by the env wrapper.
 
 seed: 42
 device: "cuda:0"
@@ -12,14 +17,32 @@ experiment_name: go2_rough_baseline
 run_name: ""
 logger: tensorboard           # or: wandb (also set wandb_project)
 wandb_project: isaaclab-locomotion
-empirical_normalization: false
+clip_actions: null            # actions are already bounded by the 0.25 rad action scale
+check_for_nan: true
 
-policy:
-  class_name: ActorCritic
-  init_noise_std: 1.0         # generous initial exploration; PPO anneals it
-  actor_hidden_dims: [512, 256, 128]
-  critic_hidden_dims: [512, 256, 128]
+# Asymmetric actor-critic: the deployable actor sees only the noisy "policy" group,
+# while the training-only critic sees the privileged, noise-free "critic" group
+# (clean state + foot contacts + true height scan). See source/tasks/locomotion_env.py.
+obs_groups:
+  actor: ["policy"]
+  critic: ["critic"]
+
+actor:
+  class_name: MLPModel
+  hidden_dims: [512, 256, 128]
   activation: elu             # smooth activation -> smoother action landscapes than relu
+  obs_normalization: false    # observation scales are already hand-normalized in the env
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0             # generous initial exploration; PPO anneals it
+    std_type: scalar
+
+critic:
+  class_name: MLPModel
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  obs_normalization: false
+  # no distribution_cfg -> deterministic scalar value output
 
 algorithm:
   class_name: PPO
@@ -35,3 +58,6 @@ algorithm:
   lam: 0.95
   desired_kl: 0.01
   max_grad_norm: 1.0
+  normalize_advantage_per_mini_batch: false
+  rnd_cfg: null               # must be present: the rsl_rl Logger indexes this key directly
+  symmetry_cfg: null

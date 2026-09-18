@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# Terrain generator config: the 7-level ladder from GUIDE.md collapsed into a
-# difficulty-interpolated grid (flat -> rough -> slopes -> boxes -> stairs -> gaps).
+# Terrain generator config: a difficulty-interpolated grid of sub-terrain types
+# (flat -> rough -> slopes -> boxes -> stairs -> gaps), 10 rows x 20 columns.
 # ---------------------------------------------------------------------------
 
 LOCOMOTION_TERRAINS_CFG = TerrainGeneratorCfg(

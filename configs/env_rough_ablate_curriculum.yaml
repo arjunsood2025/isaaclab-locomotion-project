@@ -1,0 +1,12 @@
+# Ablation: remove the terrain curriculum.
+#
+# Note the second line. Disabling promotion alone would pin robots to the easy rows they
+# spawn on (max_init_terrain_level=2), which conflates "no curriculum" with "never saw
+# hard terrain" -- two different claims. Spreading the initial level across all 10 rows
+# instead gives identical terrain *exposure* with no progressive ordering, so the
+# experiment isolates the thing the curriculum actually claims to provide: that seeing
+# difficulty in increasing order beats seeing it all at once.
+scene.num_envs: 4096
+episode_length_s: 20.0
+curriculum.terrain_levels: null
+scene.terrain.max_init_terrain_level: null

@@ -1,9 +1,10 @@
 """Custom observation terms: terrain height scan, depth camera, and delayed observations.
 
-All functions return per-env tensors of shape ``(num_envs, obs_dim)``. Isaac Lab's
-ObservationManager concatenates terms within a group in the order they are declared in
-the config, which fixes the observation layout the networks (and the deployment code)
-rely on -- see ``source/policies/models.py`` and ``source/deployment/``.
+Vector terms return ``(num_envs, obs_dim)``; the depth camera term returns a
+``(num_envs, 1, H, W)`` image. Isaac Lab's ObservationManager concatenates terms within a
+group in the order they are declared in the config, which fixes the observation layout
+the deployment code relies on -- see ``source/deployment/``. Image observations live in
+their own single-term group so nothing is concatenated onto them.
 """
 
 from __future__ import annotations
@@ -43,30 +44,29 @@ def depth_image(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,
     max_depth: float = 5.0,
-    flatten: bool = True,
 ) -> torch.Tensor:
-    """Normalized inverse depth image from a tiled (batched) camera.
+    """Normalized inverse depth image from a tiled (batched) camera, as ``(N, 1, H, W)``.
 
     Raw ``distance_to_image_plane`` is clamped to ``[0, max_depth]`` (sky / misses come
     back as inf) and mapped to ``1 - d / max_depth`` so *near = 1, far = 0*. Inverse
     depth concentrates resolution on nearby terrain -- the part that determines the next
     footstep -- and bounds the input to [0, 1] for the CNN.
 
-    The image is flattened so the ObservationManager can concatenate it after the
-    proprioceptive terms into a single vector; the vision actor-critic reshapes it back
-    (see ``ActorCriticVision._split_and_encode``).
+    The channel-first 4-D layout is deliberate: rsl_rl dispatches observation groups by
+    tensor rank, so a rank-4 group is routed to a CNN encoder while rank-2 groups go
+    straight to the MLP. Flattening here would silently turn the depth image into 4096
+    unstructured MLP inputs.
     """
     sensor: TiledCamera = env.scene.sensors[sensor_cfg.name]
     img = sensor.data.output["distance_to_image_plane"]
-    # (N, H, W, 1) -> (N, H, W)
+    # camera returns (N, H, W, 1) -> (N, H, W)
     if img.dim() == 4:
         img = img.squeeze(-1)
     img = torch.nan_to_num(img, nan=max_depth, posinf=max_depth, neginf=0.0)
     img = img.clamp(0.0, max_depth)
     img = 1.0 - img / max_depth
-    if flatten:
-        return img.reshape(img.shape[0], -1)
-    return img
+    # (N, H, W) -> (N, 1, H, W)
+    return img.unsqueeze(1)
 
 
 def feet_contact_states(
