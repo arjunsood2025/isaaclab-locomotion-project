@@ -4,7 +4,7 @@ PPO-trained locomotion policies for a Unitree Go2 in NVIDIA Isaac Lab, covering 
 flat-ground baseline, rough-terrain traversal with a difficulty curriculum, full domain
 randomization, and a depth-camera policy obtained by distillation. Includes a seeded
 evaluation harness, reward-term ablations, and a TorchScript/ONNX deployment path with
-measured inference latency.
+measured inference latency. Note: No experiments were ran on real hardware; the scope of this project was to train policies with domain randomization in Isaac Lab to improve sim-to-real.
 
 **Stack:** Isaac Sim 5.1, Isaac Lab 0.54.4, rsl-rl-lib 5.0.1, PyTorch 2.7.0+cu128.
 **Hardware used:** one NVIDIA RTX 5070 (12 GB), Windows 11.
